@@ -777,9 +777,12 @@ class Agent(AgentBase, Generic[TContext]):
             try:
                 parsed_params = params_adapter.validate_python(json_data)
             except ValidationError as exc:
-                if not _debug.DONT_LOG_TOOL_DATA:
-                    raise ModelBehaviorError(f"{base_message}: {exc}") from exc
-                validation_failed = True
+                try:
+                    parsed_params = params_adapter.validate_json(input_json or "{}")
+                except ValidationError:
+                    if not _debug.DONT_LOG_TOOL_DATA:
+                        raise ModelBehaviorError(f"{base_message}: {exc}") from exc
+                    validation_failed = True
 
             if validation_failed:
                 raise ModelBehaviorError(base_message)

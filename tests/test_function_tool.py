@@ -1762,3 +1762,95 @@ async def test_kwargs_key_colliding_with_param_is_reported_as_model_behavior_err
         )
 
     assert "'x'" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_function_tool_strict_pydantic_model_validates_json_mode():
+    """Strict Pydantic models should validate JSON arguments in JSON mode."""
+    import datetime
+    import enum
+    import uuid
+
+    from pydantic import ConfigDict
+
+    class Priority(enum.Enum):
+        LOW = "low"
+        HIGH = "high"
+
+    class StrictTicket(BaseModel):
+        model_config = ConfigDict(strict=True)
+        priority: Priority
+        due: datetime.date
+        request_id: uuid.UUID
+        coords: tuple[str, int]
+
+    def create_ticket(ticket: StrictTicket) -> str:
+        return (
+            f"{ticket.priority.value}:{ticket.due.isoformat()}:"
+            f"{ticket.request_id}:{ticket.coords}"
+        )
+
+    tool = function_tool(create_ticket, strict_mode=False, failure_error_function=None)
+    uid = "12345678-1234-5678-1234-567812345678"
+    arguments = json.dumps(
+        {
+            "ticket": {
+                "priority": "high",
+                "due": "2026-11-01",
+                "request_id": uid,
+                "coords": ["row", 3],
+            }
+        }
+    )
+    context = ToolContext(None, tool_name=tool.name, tool_call_id="1", tool_arguments=arguments)
+    result = await tool.on_invoke_tool(context, arguments)
+    assert result == f"high:2026-11-01:{uid}:('row', 3)"
+
+    # Strict primitive checks still hold in JSON mode (string "3" is rejected for int).
+    bad_arguments = json.dumps(
+        {
+            "ticket": {
+                "priority": "high",
+                "due": "2026-11-01",
+                "request_id": uid,
+                "coords": ["row", "3"],
+            }
+        }
+    )
+    bad_ctx = ToolContext(None, tool_name=tool.name, tool_call_id="2", tool_arguments=bad_arguments)
+    with pytest.raises(ModelBehaviorError):
+        await tool.on_invoke_tool(bad_ctx, bad_arguments)
+
+
+@pytest.mark.asyncio
+async def test_agent_as_tool_strict_pydantic_model_validates_json_mode():
+    """Agent.as_tool(parameters=...) should validate JSON arguments in JSON mode."""
+    import datetime
+    import enum
+
+    from pydantic import ConfigDict
+
+    from agents import Agent
+    from agents.testing import ScriptedModel, assistant_message
+    from agents.tool import FunctionTool
+
+    class Priority(enum.Enum):
+        HIGH = "high"
+
+    class StrictParams(BaseModel):
+        model_config = ConfigDict(strict=True)
+        priority: Priority
+        due: datetime.date
+
+    sub_agent = Agent(name="sub", model=ScriptedModel([[assistant_message("ok")]]))
+    sub_tool = sub_agent.as_tool(
+        tool_name="sub_ticket",
+        tool_description="Create ticket",
+        parameters=StrictParams,
+    )
+    assert isinstance(sub_tool, FunctionTool)
+
+    arguments = json.dumps({"priority": "high", "due": "2026-11-01"})
+    ctx = ToolContext(None, tool_name="sub_ticket", tool_call_id="1", tool_arguments=arguments)
+    out = await sub_tool.on_invoke_tool(ctx, arguments)
+    assert out == "ok"

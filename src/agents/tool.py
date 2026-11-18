@@ -2790,9 +2790,12 @@ def function_tool(
                     else schema.params_pydantic_model()
                 )
             except ValidationError as e:
-                if not _debug.DONT_LOG_TOOL_DATA:
-                    raise ModelBehaviorError(f"{base_message}: {e}") from e
-                validation_failed = True
+                try:
+                    parsed = schema.params_pydantic_model.model_validate_json(input or "{}")
+                except ValidationError:
+                    if not _debug.DONT_LOG_TOOL_DATA:
+                        raise ModelBehaviorError(f"{base_message}: {e}") from e
+                    validation_failed = True
 
             if validation_failed:
                 raise ModelBehaviorError(base_message)
